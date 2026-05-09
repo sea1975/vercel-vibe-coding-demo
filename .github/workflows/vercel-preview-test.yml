@@ -1,0 +1,80 @@
+name: Vercel Preview Deployment E2E Tests
+
+on:
+  # PR 时运行
+  pull_request:
+    branches: [main, master]
+  # 也支持手动触发
+  workflow_dispatch:
+
+jobs:
+  # Job 1: 等待 Vercel 预览部署完成
+  # 注意: 需要在 Vercel Dashboard 设置 DEPLOYMENT_URL secret
+  wait-for-vercel:
+    name: Wait for Vercel Preview
+    runs-on: ubuntu-latest
+    outputs:
+      preview_url: ${{ steps.set-url.outputs.url }}
+    steps:
+      - name: Set Preview URL
+        id: set-url
+        # 方式1: 通过 Vercel API 获取
+        # 需要设置 Vercel Token: ${{ secrets.VERCEL_TOKEN }}
+        # 需要设置 GitHub Ref 对应的预览 URL
+        run: |
+          echo "preview_url=${{ vars.VERCEL_PREVIEW_URL || 'https://placeholder.vercel.app' }}" >> $GITHUB_OUTPUT
+
+  # Job 2: 在预览 URL 上运行 Playwright 测试
+  e2e-tests:
+    name: Playwright E2E Tests
+    needs: wait-for-vercel
+    runs-on: ubuntu-latest
+    container: node:20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        env:
+          # 关键: 指向 Vercel 预览 URL
+          PLAYWRIGHT_BASE_URL: ${{ needs.wait-for-vercel.outputs.preview_url }}
+          CI: "true"
+        run: npx playwright test --project=chromium
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # Job 3: 构建检查（可选，在合并前验证）
+  build-check:
+    name: Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
